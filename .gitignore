@@ -1,0 +1,21 @@
+# ---- 本地开发记忆 ----
+.workbuddy/
+
+# ---- 大型字体源文件（见 tools/fonts/README.md）----
+tools/fonts/fusion-pixel-*.ttf
+fusion-pixel-font-*.zip
+fusion-pixel-font-*/
+
+# ---- 编译产物 ----
+build/
+*.bin
+*.elf
+*.map
+*.hex
+
+# ---- 操作系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ST7735 1.8" 128×160 显示仿真 · 双层 ESP8266 倒数日</title>
+<style>
+  :root{
+    --bg:#080b11; --panel:#121a23; --line:#22303f; --fg:#e6edf5;
+    --dim:#8aa3bc; --accent:#4fa8ff; --px:3;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--fg);padding:22px;
+       font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif;
+       display:flex;justify-content:center;-webkit-font-smoothing:antialiased}
+  .wrap{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap;max-width:1080px}
+  h1{font-size:16px;font-weight:500;margin:0 0 4px}
+  .sub{font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.6}
+
+  .device{background:#1b232d;border-radius:16px;padding:20px 20px 14px;
+          box-shadow:0 16px 38px rgba(0,0,0,.6);border:1px solid #2b3743}
+  .screenbox{position:relative;background:#000;border-radius:3px;overflow:hidden;
+             box-shadow:inset 0 0 0 1px #000}
+  .screenbox{width:calc(128px * var(--px));height:calc(160px * var(--px));
+             filter:brightness(var(--bl,1)) saturate(var(--sat,1)) contrast(var(--con,1))}
+  .screenbox canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+  .grid{position:absolute;inset:0;pointer-events:none;display:none;
+        background-image:linear-gradient(to right,rgba(255,255,255,.08) 1px,transparent 1px),
+                         linear-gradient(to bottom,rgba(255,255,255,.08) 1px,transparent 1px);
+        background-size:var(--px) var(--px)}
+  .grid.on{display:block}
+
+  .bezelrow{display:flex;justify-content:space-between;align-items:center;
+            margin-top:9px;font-size:10px;color:#5a6c7d;letter-spacing:.4px}
+
+  .btns{display:flex;gap:16px;margin-top:14px}
+  .btn{flex:1;position:relative;background:#232f3c;border:1px solid #33465a;border-radius:9px;
+       color:#cfe0f0;padding:11px 0;font-size:13px;cursor:pointer;overflow:hidden;
+       user-select:none;-webkit-user-select:none;text-align:center;transition:background .1s}
+  .btn:active{background:#2b3a4a}
+  .btn .hold{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(79,168,255,.5);pointer-events:none}
+  .btn .lbl{position:relative;z-index:1;line-height:1.35}
+  .btn .lbl small{display:block;font-size:10px;color:#7d90a3}
+
+  .panel{width:352px;background:var(--panel);border:1px solid var(--line);
+         border-radius:14px;padding:16px}
+  .panel h2{font-size:13px;font-weight:500;margin:0 0 10px;color:#cfe0f0}
+  .spec{font-size:11.5px;color:var(--dim);line-height:1.85;
+        background:#0d141c;border-radius:9px;padding:10px 12px;margin-bottom:14px}
+  .spec b{color:#cfe0f0;font-weight:500}
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;color:var(--dim)}
+  .row .k{width:66px;flex:none}
+  .seg{display:flex;gap:4px;flex-wrap:wrap}
+  .seg button{background:#1c2733;border:1px solid #2c3b4b;color:#a8bccd;font-size:11.5px;
+              padding:4px 9px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:#1d3a58;border-color:#3d6d9e;color:#cfe6ff}
+  input[type=range]{flex:1;accent-color:var(--accent)}
+  .state{font-size:11.5px;color:var(--dim);background:#0d141c;border-radius:9px;
+         padding:9px 12px;margin:14px 0 10px;line-height:1.8}
+  .state b{color:#cfe6ff;font-weight:500}
+  .log{font-family:Consolas,'Cascadia Mono',Menlo,monospace;font-size:11px;line-height:1.75;
+       background:#0d141c;border-radius:9px;padding:9px 12px;height:150px;overflow:auto;color:#7f97ad}
+  .log div:first-child{color:#4fa8ff}
+  .note{font-size:11px;color:#5f7488;line-height:1.7;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>ST7735 1.8" 128×160 · 像素级仿真</h1>
+    <div class="sub">左边是屏幕的 1:1 像素内容放大显示（默认 3 倍），下面两个按钮就是 A / B 键，<br>按住 0.8 秒触发长按 —— 交互模型与设计文档一致。</div>
+
+    <div class="device">
+      <div class="screenbox">
+        <canvas id="lcd" width="128" height="160"></canvas>
+        <div class="grid" id="grid"></div>
+      </div>
+      <div class="bezelrow"><span>ST7735S · 128×160 · SPI</span><span>FPC-8P</span></div>
+      <div class="btns">
+        <button class="btn" id="btnA"><span class="hold"></span><span class="lbl">A 键<small>短按 上一个 / 长按 返回</small></span></button>
+        <button class="btn" id="btnB"><span class="hold"></span><span class="lbl">B 键<small>短按 下一个 / 长按 确认</small></span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>面板参数</h2>
+    <div class="spec">
+      <b>1.8"</b> TFT LCD，驱动 IC <b>ST7735S</b><br>
+      分辨率 <b>128 × 160</b>（20,480 像素）<br>
+      色深 <b>RGB565</b>（65,536 色）<br>
+      可视区约 <b>28.6 × 35.7 mm</b><br>
+      像素间距 <b>≈ 0.223 mm</b> · <b>≈ 114 PPI</b>
+    </div>
+
+    <h2>显示设置</h2>
+    <div class="row"><span class="k">放大倍数</span>
+      <span class="seg" id="zoomSeg">
+        <button data-z="2">2×</button><button data-z="3" class="on">3×</button>
+        <button data-z="4">4×</button><button data-z="6">6×</button>
+      </span>
+    </div>
+    <div class="row"><span class="k">像素网格</span>
+      <span class="seg" id="gridSeg"><button data-g="0" class="on">关闭</button><button data-g="1">显示</button></span>
+    </div>
+    <div class="row"><span class="k">面板模拟</span>
+      <span class="seg" id="tnSeg"><button data-t="0" class="on">IPS 正视</button><button data-t="1">TN 侧看</button></span>
+    </div>
+    <div class="row"><span class="k">背光亮度</span>
+      <input type="range" id="bl" min="20" max="100" value="100">
+    </div>
+
+    <div class="state" id="state"></div>
+    <h2>按键日志</h2>
+    <div class="log" id="log"></div>
+    <div class="note">提示：切到「TN 侧看」能直观看到廉价 TN 面板在桌面摆件上最致命的问题 —— 偏色、发白、对比度塌陷。</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  const W=128, H=160;
+  const cvs=document.getElementById('lcd');
+  const ctx=cvs.getContext('2d');
+  ctx.imageSmoothingEnabled=false;
+
+  const FONT="'Microsoft YaHei','PingFang SC','Hiragino Sans GB','Noto Sans CJK SC',sans-serif";
+  const MONO="'Consolas','Cascadia Mono',ui-monospace,Menlo,monospace";
+
+  /* ---------- RGB565 量化 ---------- */
+  const _qc={};
+  function C(hex){
+    let v=_qc[hex];
+    if(v) return v;
+    const n=parseInt(hex.slice(1),16);
+    let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+    r=(r>>3)<<3; g=(g>>2)<<2; b=(b>>3)<<3;
+    v='rgb('+r+','+g+','+b+')';
+    _qc[hex]=v; return v;
+  }
+
+  /* ---------- 绘图原语 ---------- */
+  function fill(x,y,w,h,c){ ctx.fillStyle=C(c); ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); }
+  function frame(x,y,w,h,c){
+    ctx.strokeStyle=C(c); ctx.lineWidth=1;
+    ctx.strokeRect(Math.round(x)+0.5,Math.round(y)+0.5,Math.round(w)-1,Math.round(h)-1);
+  }
+  function txt(s,x,y,size,color,align,weight,fam){
+    ctx.font=((weight||'')+' '+size+'px '+(fam||FONT)).trim();
+    ctx.fillStyle=C(color);
+    ctx.textAlign=align||'left';
+    ctx.textBaseline='middle';
+    ctx.fillText(s,Math.round(x),Math.round(y));
+  }
+  function p2(n){ return (n<10?'0':'')+n; }
+
+  /* ---------- 调色板 ---------- */
+  const BG='#0D1520', BAR='#16232F', FG='#FFFFFF', SUB='#8AA3BC', HINT='#5C7691',
+        AMBER='#FFB020', ORANGE='#FF7A45', GREEN='#3FD68C', RED='#FF5A5A',
+        BLUE='#4FA8FF', LINE='#1E3040', HL='#17344F', DIMBAR='#26404F', SOFT='#C7D6E4';
+
+  /* ---------- 数据 ---------- */
+  const PAGE_NAMES=['倒数日','番茄钟','日历','天气','设置'];
+  let page=0, mode='browse', cursor=0, opLevel=0;
+
+  const target={ y:2027, m:2, d:6, name:'春节' };
+  const cities=['杭州','上海','北京'];
+  let cityIdx=0;
+
+  const pomo={ running:true, sec:18*60+42, round:2, min:25 };
+  const cal={ y:2026, m:10 };
+  let bright=3, timeout=60, buzzer=true, breakMin=5;
+
+  const log=[];
+  function say(m){
+    const t=new Date();
+    log.unshift(p2(t.getHours())+':'+p2(t.getMinutes())+':'+p2(t.getSeconds())+'  '+m);
+    if(log.length>40) log.pop();
+    document.getElementById('log').innerHTML=log.map(function(s){return '<div>'+s+'</div>';}).join('');
+  }
+
+  /* ---------- 通用零件 ---------- */
+  function statusBar(){
+    fill(0,0,W,13,BAR);
+    const n=new Date();
+    txt(p2(n.getHours())+':'+p2(n.getMinutes()),5,7,9,SUB,'left','',MONO);
+    txt((n.getMonth()+1)+'月'+n.getDate()+'日',42,7,9,HINT,'left');
+    [3,5,7,9].forEach(function(h,i){ fill(106+i*4,10-h,3,h,i<3?GREEN:DIMBAR); });
+  }
+  function dots(){
+    const w=[];
+    for(let i=0;i<5;i++) w.push(i===page?9:4);
+    let total=0; w.forEach(function(x){ total+=x+4; }); total-=4;
+    let x=Math.round((W-total)/2);
+    for(let i=0;i<5;i++){
+      fill(x,151,w[i],4,i===page?BLUE:'#263D52');
+      x+=w[i]+4;
+    }
+  }
+  function banner(){
+    fill(0,0,W,13,HL);
+    txt('编辑中',5,7,9,BLUE,'left','700');
+    txt('A 长按返回',123,7,9,'#7FB6E8','right');
+    ctx.strokeStyle=C(BLUE); ctx.lineWidth=1;
+    ctx.strokeRect(0.5,0.5,W-1,H-1);
+  }
+
+  /* ---------- 页 1 倒数日 ---------- */
+  function remain(){
+    const t=new Date(target.y,target.m-1,target.d,0,0,0).getTime()-Date.now();
+    const ms=Math.max(0,t);
+    return { d:Math.floor(ms/86400000), h:Math.floor(ms%86400000/3600000), m:Math.floor(ms%3600000/60000), s:Math.floor(ms%60000/1000) };
+  }
+  function countdownLine(d,h){
+    const ds=11, us=11, g1=2, g2=7, g3=2, avail=122, cy=54;
+    function w(s,size,f,wgt){ ctx.font=(wgt+size+'px '+f); return ctx.measureText(s).width; }
+    let ns=38, hs=21, a=0,b=0,c=0,e=0;
+    for(;;){
+      a=w(String(d),ns,MONO,'700 ');
+      b=w('天',ds,FONT,'500 ');
+      c=w(String(h),hs,MONO,'600 ');
+      e=w('小时',us,FONT,'500 ');
+      if(a+b+c+e+g1+g2+g3<=avail) break;
+      if(ns>26) ns--; else if(hs>15) hs--; else break;
+    }
+    const total=a+b+c+e+g1+g2+g3;
+    const bottom=cy+ns/2;
+    let x=64-total/2;
+    txt(String(d),x,cy,ns,AMBER,'left','700',MONO); x+=a+g1;
+    txt('天',x,bottom-ds*0.44,ds,SUB,'left','500'); x+=b+g2;
+    txt(String(h),x,bottom-hs/2,hs,SUB,'left','600',MONO); x+=c+g3;
+    txt('小时',x,bottom-us*0.44,us,SUB,'left','500');
+  }
+  function pageCountdown(){
+    fill(0,0,W,H,BG); statusBar();
+    if(mode==='operate'){ dateEdit(); dots(); return; }
+    const r=remain();
+    txt('距离',10,21,11,SUB,'left');
+    txt(target.name,44,21,12,FG,'left','600');
+    countdownLine(r.d,r.h);
+    fill(14,88,100,1,LINE);
+    txt('室内 24.5°C · 58%RH',64,102,12,GREEN,'center','600');
+    txt('多云  18° ~ 26°',64,122,11,SUB,'center');
+    txt('室外天气 14:30 更新',64,138,9,HINT,'center');
+    dots();
+  }
+  function dateEdit(){
+    txt('修改目标日期',64,26,11,SUB,'center');
+    const s=target.y+'-'+p2(target.m)+'-'+p2(target.d);
+    const cw=11, xs=64-5*cw;
+    const seg=[[0,4],[5,2],[8,2]][cursor];
+    fill(xs+seg[0]*cw-1,46,seg[1]*cw+2,24,HL);
+    frame(xs+seg[0]*cw-1,46,seg[1]*cw+2,24,BLUE);
+    txt(s,64,59,20,FG,'center','600',MONO);
+    txt('▲',xs+seg[0]*cw+seg[1]*cw/2,40,8,BLUE,'center');
+    txt('A 短按 减   B 短按 加',64,92,10,SUB,'center');
+    txt('B 长按 下一字段 / 保存',64,110,10,HINT,'center');
+    txt('正在调「'+['年','月','日'][cursor]+'」',64,131,10,'#7FB6E8','center');
+  }
+
+  /* ---------- 页 2 番茄钟 ---------- */
+  function pagePomo(){
+    fill(0,0,W,H,BG); statusBar();
+    txt(pomo.running?'专注中':'已暂停',64,25,12,pomo.running?ORANGE:SUB,'center','600');
+    txt('第 '+pomo.round+' 个番茄 · '+pomo.min+' 分钟',64,42,10,HINT,'center');
+    const mm=p2(Math.floor(pomo.sec/60)), ss=p2(pomo.sec%60);
+    txt(mm+':'+ss,64,74,36,pomo.running?FG:SUB,'center','600',MONO);
+    const total=pomo.min*60, done=1-pomo.sec/total;
+    fill(14,98,100,3,LINE);
+    fill(14,98,Math.round(100*Math.max(0,Math.min(1,done))),3,ORANGE);
+    const dw=7, gap=6, tot=4*dw+3*gap, sx=Math.round((W-tot)/2);
+    for(let i=0;i<4;i++){
+      const x=sx+i*(dw+gap);
+      if(i<pomo.round-1) fill(x,114,dw,dw,ORANGE);
+      else frame(x,114,dw,dw,i===pomo.round-1?ORANGE:DIMBAR);
+    }
+    txt('B 长按 打开菜单',64,136,10,HINT,'center');
+    dots();
+  }
+  function pomoMenu(){
+    txt('番茄钟菜单',64,26,11,SUB,'center');
+    const items=['开始 / 暂停','重置计时','设置时长'];
+    items.forEach(function(s,i){
+      const y=52+i*24;
+      if(i===cursor){ fill(12,y-9,104,20,HL); }
+      txt(s,24,y,12,i===cursor?FG:SUB,'left','600');
+      if(i===cursor) txt('‹',108,y,12,BLUE,'right');
+    });
+  }
+
+  /* ---------- 页 3 日历 ---------- */
+  function pageCal(){
+    fill(0,0,W,H,BG); statusBar();
+    txt(cal.y+' 年 '+cal.m+' 月',64,23,12,FG,'center','600');
+    if(mode==='operate') txt('▲ A/B 短按 翻月',64,38,9,BLUE,'center');
+    const wd=['日','一','二','三','四','五','六'];
+    for(let i=0;i<7;i++) txt(wd[i],2+i*18+9,43,9,HINT,'center');
+    const first=new Date(cal.y,cal.m-1,1).getDay();
+    const days=new Date(cal.y,cal.m,0).getDate();
+    const today=new Date();
+    for(let d=1;d<=days;d++){
+      const idx=first+d-1, r=Math.floor(idx/7), c=idx%7;
+      const x=2+c*18, y=50+r*15;
+      const isToday=(cal.y===today.getFullYear()&&cal.m===today.getMonth()+1&&d===today.getDate());
+      const isTgt=(cal.y===target.y&&cal.m===target.m&&d===target.d);
+      if(isToday){
+        fill(x+1,y,16,13,HL);
+        txt(d,x+9,y+7,10,BLUE,'center','700');
+      } else {
+        txt(d,x+9,y+7,10,isTgt?RED:SOFT,'center',isTgt?'700':'');
+      }
+      if(isTgt) fill(x+7,y+12,5,2,RED);
+    }
+    txt('目标日 '+target.y+'-'+p2(target.m)+'-'+p2(target.d),64,144,9,HINT,'center');
+    dots();
+  }
+
+  /* ---------- 页 4 天气 ---------- */
+  function glyph(x,y){
+    ctx.fillStyle=C(AMBER);
+    ctx.beginPath(); ctx.arc(x-5,y-6,7,0,7); ctx.fill();
+    ctx.fillStyle=C(SOFT);
+    ctx.beginPath();
+    ctx.arc(x-3,y+4,7,0,7); ctx.arc(x+6,y+1,9,0,7); ctx.arc(x+15,y+5,5,0,7);
+    ctx.fill();
+    ctx.fillRect(x-3,y+4,18,6);
+  }
+  function pageWeather(){
+    fill(0,0,W,H,BG); statusBar();
+    txt(cities[cityIdx],10,23,12,FG,'left','600');
+    txt('14:30 更新',118,23,9,HINT,'right');
+    glyph(64,52);
+    txt('多云 26°',64,82,14,FG,'center','600');
+    txt('18° ~ 26°',64,98,10,SUB,'center');
+    fill(14,106,100,1,LINE);
+    const rows=[['今天','晴','18~26'],['明天','多云','19~27'],['后天','小雨','16~23']];
+    rows.forEach(function(r,i){
+      const y=116+i*14;
+      txt(r[0],10,y,10,HINT,'left');
+      txt(r[1],48,y,10,SOFT,'left');
+      txt(r[2]+'°',118,y,10,SOFT,'right');
+    });
+    dots();
+  }
+
+  /* ---------- 页 5 设置 ---------- */
+  const settings=[
+    {k:'目标日期', v:function(){ return target.y+'-'+p2(target.m)+'-'+p2(target.d); }},
+    {k:'目标名称', v:function(){ return target.name; }},
+    {k:'屏幕亮度', v:function(){ return bright+' / 5'; }},
+    {k:'背光超时', v:function(){ return timeout+' 秒'; }},
+    {k:'蜂鸣器',   v:function(){ return buzzer?'开':'关'; }},
+    {k:'番茄时长', v:function(){ return pomo.min+' / '+breakMin; }},
+    {k:'WiFi 设置', v:function(){ return '已连接'; }}
+  ];
+  function pageSettings(){
+    fill(0,0,W,H,BG); statusBar();
+    txt('设置',10,23,12,FG,'left','600');
+    const ed=(mode==='operate'&&opLevel===1);
+    settings.forEach(function(it,i){
+      const y=32+i*15;
+      if(i===cursor&&mode==='operate'){
+        fill(4,y-1,120,14,HL);
+        fill(4,y-1,2,14,ed?ORANGE:BLUE);
+      }
+      txt(it.k,11,y+6,10,(i===cursor&&mode==='operate')?FG:SUB,'left');
+      txt(it.v(),119,y+6,10,(i===cursor&&mode==='operate')?(ed?ORANGE:BLUE):HINT,'right');
+    });
+    if(mode==='browse') txt('B 长按 进入设置',64,143,9,HINT,'center');
+    else if(ed) txt('A/B 短按 改值 · B 长按 保存',64,143,9,ORANGE,'center');
+    else txt('A/B 短按 选择 · B 长按 编辑',64,143,9,BLUE,'center');
+    dots();
+  }
+
+  /* ---------- 渲染 ---------- */
+  function render(){
+    if(page===0) pageCountdown();
+    else if(page===1){ fill(0,0,W,H,BG); statusBar(); if(mode==='operate'){ pomoMenu(); dots(); } else pagePomo(); }
+    else if(page===2) pageCal();
+    else if(page===3) pageWeather();
+    else pageSettings();
+    if(mode==='operate') banner();
+    document.getElementById('state').innerHTML=
+      '当前页面：<b>'+PAGE_NAMES[page]+'</b> &nbsp;|&nbsp; 状态：<b>'+
+      (mode==='browse'?'浏览态':'操作态'+(opLevel===1?'（改值中）':''))+'</b>';
+  }
+
+  /* ---------- 按键逻辑 ---------- */
+  function openOp(){ mode='operate'; opLevel=0; cursor=0; say('B 长按 → 进入操作态'); }
+  function closeOp(){ mode='browse'; opLevel=0; cursor=0; say('已退出操作态'); }
+
+  const menuItems=3;
+  function onA(long){
+    if(mode==='browse'){
+      if(long){ page=0; cursor=0; say('A 长按 → 回到主页'); }
+      else { page=(page+4)%5; cursor=0; say('A 短按 → 上一页：'+PAGE_NAMES[page]); }
+      return;
+    }
+    if(long){
+      if(opLevel===1){ opLevel=0; say('A 长按 → 取消修改'); }
+      else closeOp();
+      return;
+    }
+    if(page===0){
+      if(cursor===0) target.y=Math.max(2026,target.y-1);
+      else if(cursor===1) target.m=(target.m===1?12:target.m-1);
+      else target.d=(target.d===1?28:target.d-1);
+      say('A 短按 → 减');
+    } else if(page===1){
+      cursor=(cursor+menuItems-1)%menuItems; say('A 短按 → 上一项');
+    } else if(page===2){
+      cal.m--; if(cal.m<1){ cal.m=12; cal.y--; } say('A 短按 → 上个月');
+    } else if(page===3){
+      cityIdx=(cityIdx+cities.length-1)%cities.length; say('A 短按 → 上一个城市');
+    } else {
+      if(opLevel===1){ adj(cursor,-1); }
+      else { cursor=(cursor+settings.length-1)%settings.length; say('A 短按 → 上一项'); }
+    }
+  }
+  function onB(long){
+    if(mode==='browse'){
+      if(long) openOp();
+      else { page=(page+1)%5; cursor=0; say('B 短按 → 下一页：'+PAGE_NAMES[page]); }
+      return;
+    }
+    if(long){
+      if(page===0){
+        if(cursor<2){ cursor++; say('B 长按 → 下一字段'); }
+        else { closeOp(); say('B 长按 → 保存目标日期'); }
+      } else if(page===1){
+        if(cursor===0){ pomo.running=!pomo.running; say('B 长按 → '+(pomo.running?'开始计时':'暂停计时')); }
+        else if(cursor===1){ pomo.sec=pomo.min*60; pomo.running=false; say('B 长按 → 重置计时'); }
+        else say('B 长按 → 时长设置（示意）');
+        closeOp();
+      } else if(page===2){
+        say('B 长按 → 已设为倒数目标日'); closeOp();
+      } else if(page===3){
+        say('B 长按 → 手动刷新天气'); closeOp();
+      } else {
+        if(opLevel===0){ opLevel=1; say('B 长按 → 编辑「'+settings[cursor].k+'」'); }
+        else { opLevel=0; say('B 长按 → 保存「'+settings[cursor].k+'」'); }
+      }
+      return;
+    }
+    if(page===0){ say('B 短按 → 加'); }
+    else if(page===1){ cursor=(cursor+1)%menuItems; say('B 短按 → 下一项'); }
+    else if(page===2){ cal.m++; if(cal.m>12){ cal.m=1; cal.y++; } say('B 短按 → 下个月'); }
+    else if(page===3){ cityIdx=(cityIdx+1)%cities.length; say('B 短按 → 下一个城市'); }
+    else {
+      if(opLevel===1) adj(cursor,1);
+      else { cursor=(cursor+1)%settings.length; say('B 短按 → 下一项'); }
+    }
+  }
+  function adj(i,dd){
+    if(i===0){ target.d+=dd; if(target.d<1)target.d=28; if(target.d>28)target.d=1; }
+    else if(i===1){ target.name=(target.name==='春节'?'生日':'春节'); }
+    else if(i===2){ bright=Math.max(1,Math.min(5,bright+dd)); syncBL(); }
+    else if(i===3){ timeout=Math.max(10,Math.min(120,timeout+dd*10)); }
+    else if(i===4){ buzzer=!buzzer; }
+    else if(i===5){ pomo.min=Math.max(5,Math.min(60,pomo.min+dd*5)); }
+    else { say('B 长按 恢复出厂（示意）'); }
+    say('调整「'+settings[i].k+'」');
+  }
+  function syncBL(){
+    document.getElementById('bl').value=bright*20;
+    document.querySelector('.screenbox').style.setProperty('--bl',(0.4+0.6*bright/5).toFixed(2));
+  }
+
+  /* ---------- 长按 / 短按 ---------- */
+  const HOLD=800;
+  function bindHold(el,fn){
+    const bar=el.querySelector('.hold');
+    let raf=null, t0=0, fired=false;
+    el.addEventListener('pointerdown',function(e){
+      e.preventDefault();
+      if(el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      fired=false; t0=performance.now();
+      (function tick(){
+        const p=Math.min(1,(performance.now()-t0)/HOLD);
+        bar.style.width=(p*100)+'%';
+        if(p<1){ raf=requestAnimationFrame(tick); }
+        else { fired=true; bar.style.width='0%'; fn(true); }
+      })();
+    });
+    el.addEventListener('pointerup',function(){
+      if(raf) cancelAnimationFrame(raf); raf=null;
+      bar.style.width='0%';
+      if(!fired&&performance.now()-t0<HOLD) fn(false);
+    });
+    el.addEventListener('pointercancel',function(){
+      if(raf) cancelAnimationFrame(raf); raf=null; bar.style.width='0%';
+    });
+  }
+  document.getElementById('btnA');
+  bindHold(document.getElementById('btnA'),onA);
+  bindHold(document.getElementById('btnB'),onB);
+
+  document.addEventListener('keydown',function(e){
+    if(e.repeat) return;
+    if(e.key==='a'||e.key==='A'||e.key==='ArrowLeft'){ onA(false); render(); }
+    if(e.key==='d'||e.key==='D'||e.key==='ArrowRight'){ onB(false); render(); }
+    if(e.key==='w'||e.key==='W'){ onA(true); render(); }
+    if(e.key==='s'||e.key==='S'){ onB(true); render(); }
+  });
+
+  /* ---------- 控件 ---------- */
+  const root=document.documentElement;
+  document.getElementById('zoomSeg').addEventListener('click',function(e){
+    const b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.children,function(c){ c.classList.remove('on'); });
+    b.classList.add('on'); root.style.setProperty('--px',b.dataset.z);
+  });
+  document.getElementById('gridSeg').addEventListener('click',function(e){
+    const b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.children,function(c){ c.classList.remove('on'); });
+    b.classList.add('on');
+    document.getElementById('grid').classList.toggle('on',b.dataset.g==='1');
+  });
+  document.getElementById('tnSeg').addEventListener('click',function(e){
+    const b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.children,function(c){ c.classList.remove('on'); });
+    b.classList.add('on');
+    const sc=document.querySelector('.screenbox');
+    const tn=b.dataset.t==='1';
+    sc.style.setProperty('--sat',tn?'0.42':'1');
+    sc.style.setProperty('--con',tn?'0.72':'1');
+  });
+  document.getElementById('bl').addEventListener('input',function(){
+    document.querySelector('.screenbox').style.setProperty('--bl',(0.35+0.65*this.value/100).toFixed(2));
+  });
+
+  /* ---------- 主循环 ---------- */
+  const hp=parseInt((location.hash||'').slice(1),10);
+  if(hp>=0&&hp<5) page=hp;
+  syncBL();
+  setInterval(function(){
+    if(pomo.running&&pomo.sec>0){ pomo.sec--; if(pomo.sec===0){ pomo.running=false; say('番茄钟结束，蜂鸣器响 3 声'); pomo.sec=pomo.min*60; } }
+    render();
+  },1000);
+
+  say('仿真已启动 · 默认停在倒数日主页');
+  render();
+})();
+</script>
+</body>
+</html>
